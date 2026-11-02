@@ -26,6 +26,9 @@ import java.io.PushbackInputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
@@ -242,6 +245,8 @@ public final class ZipHelper {
      * @return The zip archive freshly open.
      * @throws IOException if the zip file cannot be opened or closed to read the header signature
      * @throws NotOfficeXmlFileException if stream does not start with zip header signature
+     * @throws InvalidZipException if the zip file contains an entry with an empty name
+     *  or more than 1 entry with the same name
      */
     public static ZipFile openZipFile(File file) throws IOException, NotOfficeXmlFileException {
         if (!file.exists()) {
@@ -260,7 +265,41 @@ public final class ZipHelper {
         }
 
         // Open as a proper zip file
-        return new ZipSecureFile(file);
+        final ZipFile zipFile = new ZipSecureFile(file);
+        try {
+            validateEntryNames(zipFile);
+        } catch (InvalidZipException e) {
+            // don't leak the file handle of the rejected zip file
+            zipFile.close();
+            throw e;
+        }
+        return zipFile;
+    }
+
+    /**
+     * Rejects zip files with an entry without a name or with more than one entry
+     * with the same (case-insensitive) name, as different zip readers might
+     * pick different entries in that case.
+     *
+     * @param zipFile the zip file to check
+     * @throws InvalidZipException if the zip file contains an entry with an empty name
+     *  or more than 1 entry with the same name
+     */
+    private static void validateEntryNames(ZipFile zipFile) throws InvalidZipException {
+        final Enumeration<? extends ZipEntry> en = zipFile.entries();
+        final Set<String> filenames = new HashSet<String>();
+        while (en.hasMoreElements()) {
+            final ZipEntry entry = en.nextElement();
+            String name = entry.getName();
+            if (name == null || name.isEmpty()) {
+                throw new InvalidZipException("Input file contains an entry with an empty name");
+            }
+            name = name.toLowerCase(Locale.ROOT);
+            if (filenames.contains(name)) {
+                throw new InvalidZipException("Input file contains more than 1 entry with the name " + entry.getName());
+            }
+            filenames.add(name);
+        }
     }
 
     /**

@@ -33,15 +33,21 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 import java.util.zip.CRC32;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 import org.apache.poi.POIDataSamples;
 import org.apache.poi.POIXMLProperties;
 import org.apache.poi.hssf.HSSFTestDataSamples;
 import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
+import org.apache.poi.openxml4j.exceptions.InvalidOperationException;
 import org.apache.poi.openxml4j.opc.ContentTypes;
 import org.apache.poi.openxml4j.opc.OPCPackage;
 import org.apache.poi.openxml4j.opc.PackageAccess;
@@ -50,8 +56,10 @@ import org.apache.poi.openxml4j.opc.PackagePartName;
 import org.apache.poi.openxml4j.opc.PackageRelationshipCollection;
 import org.apache.poi.openxml4j.opc.PackagingURIHelper;
 import org.apache.poi.openxml4j.opc.internal.FileHelper;
+import org.apache.poi.openxml4j.opc.internal.InvalidZipException;
 import org.apache.poi.openxml4j.opc.internal.MemoryPackagePart;
 import org.apache.poi.openxml4j.opc.internal.PackagePropertiesPart;
+import org.apache.poi.openxml4j.opc.internal.ZipHelper;
 import org.apache.poi.ss.SpreadsheetVersion;
 import org.apache.poi.ss.usermodel.BaseTestXWorkbook;
 import org.apache.poi.ss.usermodel.Cell;
@@ -1179,5 +1187,256 @@ public final class TestXSSFWorkbook extends BaseTestXWorkbook {
         assertEquals(sheet2Name, wb.getNameAt(0));
 
         wb.close();
+    }
+
+    private static final String CONTENT_TYPES_ENTRY = "[Content_Types].xml";
+    private static final String DUPLICATE_ENTRY_MESSAGE = "Input file contains more than 1 entry with the name ";
+    private static final String EMPTY_ENTRY_NAME_MESSAGE = "Input file contains an entry with an empty name";
+
+    @Test
+    public void testDuplicateFileReadAsOPCFile() throws IOException {
+        File file = writeTempFile(createZipWithExtraEntry(CONTENT_TYPES_ENTRY));
+        try {
+            OPCPackage pkg = OPCPackage.open(file, PackageAccess.READ);
+            pkg.revert();
+            fail("Should not be able to open a file with duplicate zip entry names");
+        } catch (InvalidFormatException e) {
+            assertInvalidZip(e, DUPLICATE_ENTRY_MESSAGE + CONTENT_TYPES_ENTRY);
+        } finally {
+            assertTrue(file.delete());
+        }
+    }
+
+    @Test
+    public void testDuplicateFileReadAsFile() throws IOException {
+        File file = writeTempFile(createZipWithExtraEntry(CONTENT_TYPES_ENTRY));
+        try {
+            XSSFWorkbook wb = new XSSFWorkbook(file);
+            wb.getPackage().revert();
+            fail("Should not be able to open a file with duplicate zip entry names");
+        } catch (InvalidFormatException e) {
+            assertInvalidZip(e, DUPLICATE_ENTRY_MESSAGE + CONTENT_TYPES_ENTRY);
+        } finally {
+            assertTrue(file.delete());
+        }
+    }
+
+    @Test
+    public void testDuplicateFileReadAsPath() throws IOException {
+        File file = writeTempFile(createZipWithExtraEntry(CONTENT_TYPES_ENTRY));
+        try {
+            OPCPackage pkg = OPCPackage.open(file.getAbsolutePath(), PackageAccess.READ);
+            pkg.revert();
+            fail("Should not be able to open a file with duplicate zip entry names");
+        } catch (InvalidOperationException e) {
+            assertInvalidZip(e, DUPLICATE_ENTRY_MESSAGE + CONTENT_TYPES_ENTRY);
+        } catch (InvalidFormatException e) {
+            fail("Expected an InvalidOperationException, but had " + e);
+        } finally {
+            assertTrue(file.delete());
+        }
+    }
+
+    @Test
+    public void testDuplicateFileReadAsStream() throws IOException {
+        byte[] zip = createZipWithExtraEntry(CONTENT_TYPES_ENTRY);
+        try {
+            XSSFWorkbook wb = new XSSFWorkbook(new ByteArrayInputStream(zip));
+            wb.getPackage().revert();
+            fail("Should not be able to open a stream with duplicate zip entry names");
+        } catch (InvalidZipException e) {
+            assertEquals(DUPLICATE_ENTRY_MESSAGE + CONTENT_TYPES_ENTRY, e.getMessage());
+        }
+    }
+
+    @Test
+    public void testDuplicateFileReadAsOPCStream() throws IOException {
+        byte[] zip = createZipWithExtraEntry(CONTENT_TYPES_ENTRY);
+        try {
+            OPCPackage pkg = OPCPackage.open(new ByteArrayInputStream(zip));
+            pkg.revert();
+            fail("Should not be able to open a stream with duplicate zip entry names");
+        } catch (InvalidFormatException e) {
+            assertInvalidZip(e, DUPLICATE_ENTRY_MESSAGE + CONTENT_TYPES_ENTRY);
+        }
+    }
+
+    @Test
+    public void testDuplicateFileReadAsZipFile() throws IOException {
+        File file = writeTempFile(createZipWithExtraEntry(CONTENT_TYPES_ENTRY));
+        try {
+            ZipFile zipFile = ZipHelper.openZipFile(file);
+            zipFile.close();
+            fail("Should not be able to open a file with duplicate zip entry names");
+        } catch (InvalidZipException e) {
+            assertEquals(DUPLICATE_ENTRY_MESSAGE + CONTENT_TYPES_ENTRY, e.getMessage());
+        } finally {
+            assertTrue(file.delete());
+        }
+    }
+
+    /**
+     * Without a readable central directory, ZipPackage falls back to reading the
+     * local file headers as a stream - the duplicates need to be detected there too
+     */
+    @Test
+    public void testDuplicateFileWithCorruptCentralDirectoryReadAsOPCFile() throws IOException {
+        byte[] zip = createZipWithExtraEntry(CONTENT_TYPES_ENTRY);
+        // break the "end of central directory" signature, so java.util.zip.ZipFile can't open the file
+        int endSig = -1;
+        for (int i = zip.length - 22; i >= 0 && endSig == -1; i--) {
+            if (zip[i] == 'P' && zip[i+1] == 'K' && zip[i+2] == 5 && zip[i+3] == 6) {
+                endSig = i;
+            }
+        }
+        assertTrue("end of central directory record not found", endSig >= 0);
+        zip[endSig+3] = 7;
+
+        File file = writeTempFile(zip);
+        try {
+            OPCPackage pkg = OPCPackage.open(file, PackageAccess.READ);
+            pkg.revert();
+            fail("Should not be able to open a file with duplicate zip entry names");
+        } catch (InvalidFormatException e) {
+            assertInvalidZip(e, DUPLICATE_ENTRY_MESSAGE + CONTENT_TYPES_ENTRY);
+        } finally {
+            assertTrue(file.delete());
+        }
+    }
+
+    /**
+     * OPC part names are compared case-insensitive, so entries which only differ in
+     * their case are duplicates as well
+     */
+    @Test
+    public void testCaseInsensitiveDuplicateFileReadAsOPCFile() throws IOException {
+        String duplicateName = "xl/worksheets/Sheet1.xml";
+        File file = writeTempFile(createZipWithExtraEntry(duplicateName));
+        try {
+            OPCPackage pkg = OPCPackage.open(file, PackageAccess.READ);
+            pkg.revert();
+            fail("Should not be able to open a file with case-insensitive duplicate zip entry names");
+        } catch (InvalidFormatException e) {
+            assertInvalidZip(e, DUPLICATE_ENTRY_MESSAGE + duplicateName);
+        } finally {
+            assertTrue(file.delete());
+        }
+    }
+
+    @Test
+    public void testCaseInsensitiveDuplicateFileReadAsStream() throws IOException {
+        String duplicateName = "xl/worksheets/Sheet1.xml";
+        byte[] zip = createZipWithExtraEntry(duplicateName);
+        try {
+            XSSFWorkbook wb = new XSSFWorkbook(new ByteArrayInputStream(zip));
+            wb.getPackage().revert();
+            fail("Should not be able to open a stream with case-insensitive duplicate zip entry names");
+        } catch (InvalidZipException e) {
+            assertEquals(DUPLICATE_ENTRY_MESSAGE + duplicateName, e.getMessage());
+        }
+    }
+
+    @Test
+    public void testEmptyEntryNameReadAsOPCFile() throws IOException {
+        File file = writeTempFile(createZipWithExtraEntry(""));
+        try {
+            OPCPackage pkg = OPCPackage.open(file, PackageAccess.READ);
+            pkg.revert();
+            fail("Should not be able to open a file with an empty zip entry name");
+        } catch (InvalidFormatException e) {
+            assertInvalidZip(e, EMPTY_ENTRY_NAME_MESSAGE);
+        } finally {
+            assertTrue(file.delete());
+        }
+    }
+
+    @Test
+    public void testEmptyEntryNameReadAsStream() throws IOException {
+        byte[] zip = createZipWithExtraEntry("");
+        try {
+            XSSFWorkbook wb = new XSSFWorkbook(new ByteArrayInputStream(zip));
+            wb.getPackage().revert();
+            fail("Should not be able to open a stream with an empty zip entry name");
+        } catch (InvalidZipException e) {
+            assertEquals(EMPTY_ENTRY_NAME_MESSAGE, e.getMessage());
+        }
+    }
+
+    private static void assertInvalidZip(Throwable e, String expectedMessage) {
+        Throwable cause = e;
+        while (cause != null && !(cause instanceof InvalidZipException)) {
+            cause = cause.getCause();
+        }
+        if (cause == null) {
+            AssertionError ae = new AssertionError("Expected an InvalidZipException as cause of " + e);
+            ae.initCause(e);
+            throw ae;
+        }
+        assertEquals(expectedMessage, cause.getMessage());
+    }
+
+    private static File writeTempFile(byte[] data) throws IOException {
+        File file = TempFile.createTempFile("duplicate-file", ".xlsx");
+        OutputStream out = new FileOutputStream(file);
+        try {
+            out.write(data);
+        } finally {
+            out.close();
+        }
+        return file;
+    }
+
+    /**
+     * Creates a copy of sample.xlsx with an additional zip entry named {@code extraEntryName},
+     * which holds the data of the existing entry with the same (case-insensitive) name.
+     * As {@link ZipOutputStream} refuses to write duplicate entry names, the additional entry
+     * is written under a placeholder name of the same length, which is then renamed in the
+     * local file header and the central directory of the written archive.
+     */
+    private static byte[] createZipWithExtraEntry(String extraEntryName) throws IOException {
+        final byte[] extraName = extraEntryName.getBytes("UTF-8");
+        final byte[] placeholder = new byte[extraName.length];
+        Arrays.fill(placeholder, (byte)'~');
+
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        ZipOutputStream zos = new ZipOutputStream(bos);
+        byte[] extraData = new byte[0];
+        ZipInputStream zis = new ZipInputStream(HSSFTestDataSamples.openSampleFileStream("sample.xlsx"));
+        try {
+            ZipEntry ze;
+            while ((ze = zis.getNextEntry()) != null) {
+                byte[] data = IOUtils.toByteArray(zis);
+                if (ze.getName().equalsIgnoreCase(extraEntryName)) {
+                    extraData = data;
+                }
+                zos.putNextEntry(new ZipEntry(ze.getName()));
+                zos.write(data);
+                zos.closeEntry();
+            }
+        } finally {
+            zis.close();
+        }
+        zos.putNextEntry(new ZipEntry(new String(placeholder, "UTF-8")));
+        zos.write(extraData);
+        zos.closeEntry();
+        zos.close();
+
+        byte[] zip = bos.toByteArray();
+        if (placeholder.length > 0) {
+            int renamed = 0;
+            for (int i = 0; i <= zip.length - placeholder.length; i++) {
+                boolean found = true;
+                for (int j = 0; j < placeholder.length && found; j++) {
+                    found = (zip[i+j] == placeholder[j]);
+                }
+                if (found) {
+                    System.arraycopy(extraName, 0, zip, i, extraName.length);
+                    renamed++;
+                }
+            }
+            // the entry name is stored in the local file header and in the central directory
+            assertEquals(2, renamed);
+        }
+        return zip;
     }
 }

@@ -21,6 +21,7 @@ import org.apache.poi.openxml4j.opc.*;
 import org.apache.poi.openxml4j.opc.OPCPackage;
 import org.apache.poi.openxml4j.exceptions.OpenXML4JException;
 import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
+import org.apache.poi.openxml4j.opc.internal.InvalidZipException;
 import org.apache.poi.util.IOUtils;
 import org.apache.poi.POIXMLException;
 
@@ -36,6 +37,10 @@ public final class PackageHelper {
         try {
             return OPCPackage.open(is);
         } catch (InvalidFormatException e){
+            final Throwable cause = e.getCause();
+            if (cause instanceof InvalidZipException) {
+                throw (InvalidZipException) cause;
+            }
             throw new POIXMLException(e);
         }
     }

@@ -36,6 +36,7 @@ import org.apache.poi.openxml4j.exceptions.OpenXML4JException;
 import org.apache.poi.openxml4j.exceptions.OpenXML4JRuntimeException;
 import org.apache.poi.openxml4j.opc.internal.ContentTypeManager;
 import org.apache.poi.openxml4j.opc.internal.FileHelper;
+import org.apache.poi.openxml4j.opc.internal.InvalidZipException;
 import org.apache.poi.openxml4j.opc.internal.MemoryPackagePart;
 import org.apache.poi.openxml4j.opc.internal.PartMarshaller;
 import org.apache.poi.openxml4j.opc.internal.ZipContentTypeManager;
@@ -103,6 +104,9 @@ public final class ZipPackage extends OPCPackage {
             } catch (final IOException e2) {
                 throw new IOException("Failed to close zip input stream while cleaning up. " + e.getMessage(), e2);
             }
+            if (e instanceof InvalidZipException) {
+                throw e;
+            }
             throw new IOException("Failed to read zip entry source", e);
         }
     }
@@ -136,6 +140,8 @@ public final class ZipPackage extends OPCPackage {
         try {
             final ZipFile zipFile = ZipHelper.openZipFile(file);
             ze = new ZipFileZipEntrySource(zipFile);
+        } catch (InvalidZipException e) {
+            throw new InvalidOperationException("Can't open the specified file: '" + file + "'", e);
         } catch (IOException e) {
             // probably not happening with write access - not sure how to handle the default read-write access ...
             if (access == PackageAccess.WRITE) {

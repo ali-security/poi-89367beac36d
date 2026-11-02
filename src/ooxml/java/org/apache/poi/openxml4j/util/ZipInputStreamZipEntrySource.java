@@ -22,9 +22,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Locale;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 
+import org.apache.poi.openxml4j.opc.internal.InvalidZipException;
 import org.apache.poi.openxml4j.util.ZipSecureFile.ThresholdInputStream;
 
 /**
@@ -43,16 +47,29 @@ public class ZipInputStreamZipEntrySource implements ZipEntrySource {
 	 *  into memory, and closes the source stream.
 	 * We'll then eat lots of memory, but be able to
 	 *  work with the entries at-will.
+	 * @throws IOException if an error occurs while reading the zip entries
+	 * @throws InvalidZipException if the input file contains an entry with an empty name or more than 1 entry with the same name
 	 */
 	public ZipInputStreamZipEntrySource(ThresholdInputStream inp) throws IOException {
 		zipEntries = new ArrayList<FakeZipEntry>();
-		
+		final Set<String> filenames = new HashSet<String>();
+
 		boolean going = true;
 		while(going) {
 			ZipEntry zipEntry = inp.getNextEntry();
 			if(zipEntry == null) {
 				going = false;
 			} else {
+				String name = zipEntry.getName();
+				if (name == null || name.isEmpty()) {
+					throw new InvalidZipException("Input file contains an entry with an empty name");
+				}
+				name = name.toLowerCase(Locale.ROOT);
+				if (filenames.contains(name)) {
+					throw new InvalidZipException("Input file contains more than 1 entry with the name " + zipEntry.getName());
+				}
+				filenames.add(name);
+
 				FakeZipEntry entry = new FakeZipEntry(zipEntry, inp);
 				inp.closeEntry();
 				
