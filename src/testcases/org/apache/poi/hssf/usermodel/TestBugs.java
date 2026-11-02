@@ -2940,6 +2940,9 @@ public final class TestBugs extends BaseTestBugzillaIssues {
         wb.close();
     }
     
+    // seal: network-dependent - http://poi.apache.org/resources/images/project-logo.jpg no longer
+    // serves a JPEG, so ImageIO.read returns null and ImageIO.write throws "image == null!"
+    @Ignore("seal: downloads http://poi.apache.org/resources/images/project-logo.jpg, which no longer serves a JPEG (ImageIO.read returns null)")
     @Test
     public void test46515() throws IOException {
         Workbook wb = HSSFTestDataSamples.openSampleWorkbook("46515.xls");
